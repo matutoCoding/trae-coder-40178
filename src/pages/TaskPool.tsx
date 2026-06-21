@@ -202,8 +202,8 @@ function TaskPool() {
                 <Text type="secondary" style={{ marginRight: 8 }}>坐席：</Text>
                 <Input
                   prefix={<SearchOutlined />}
-                  placeholder="搜索坐席姓名/工号"
-                  style={{ width: 200 }}
+                  placeholder="输入姓名或工号，如：张小雨 / A10023"
+                  style={{ width: 240 }}
                   value={filterAgent}
                   onChange={(e) => setFilterAgent(e.target.value)}
                   allowClear

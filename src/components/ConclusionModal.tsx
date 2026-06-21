@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import {
   Modal,
   Button,
@@ -8,19 +8,22 @@ import {
   Tag,
   Typography,
   Descriptions,
-  Divider,
   Alert,
   message,
+  List,
 } from 'antd'
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
-  FileTextOutlined,
   ExclamationCircleOutlined,
+  ClockCircleOutlined,
+  MessageOutlined,
+  FileTextOutlined,
+  WarningOutlined,
 } from '@ant-design/icons'
 import { useQcStore } from '../store/qcStore'
 import { QC_CATEGORY_LABELS } from '../types'
-import type { QcConclusion } from '../types'
+import type { QcConclusion, QcCheckItem, ProblemFragment } from '../types'
 
 const { Text, Title, Paragraph } = Typography
 const { TextArea } = Input
@@ -29,6 +32,7 @@ interface ConclusionModalProps {
   open: boolean
   onClose: () => void
   onSubmitted: (conclusion: QcConclusion) => void
+  viewOnly?: boolean
 }
 
 function formatTime(seconds: number) {
@@ -37,27 +41,94 @@ function formatTime(seconds: number) {
   return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
 }
 
-function ConclusionModal({ open, onClose, onSubmitted }: ConclusionModalProps) {
+interface FailedItemWithFragments {
+  item: QcCheckItem
+  fragments: ProblemFragment[]
+}
+
+function ConclusionModal({ open, onClose, onSubmitted, viewOnly }: ConclusionModalProps) {
   const currentCall = useQcStore((s) => s.currentCall)
   const qcItems = useQcStore((s) => s.qcItems)
+  const validateSubmittable = useQcStore((s) => s.validateSubmittable)
   const submitConclusion = useQcStore((s) => s.submitConclusion)
 
   const [inspectorName, setInspectorName] = useState('张主管')
   const [overallComment, setOverallComment] = useState('')
   const [submitted, setSubmitted] = useState<QcConclusion | null>(null)
+  const [showErrors, setShowErrors] = useState(false)
 
-  const pendingCount = qcItems.filter((i) => i.isPassed === null).length
-  const canSubmit = pendingCount === 0 && inspectorName.trim()
+  const existingConclusion = currentCall?.qcConclusion
+  const isViewOnly = viewOnly || !!existingConclusion
+  const displayConclusion = submitted || existingConclusion || null
+
+  const validation = useMemo(() => validateSubmittable(), [qcItems, validateSubmittable])
+  const canSubmit = validation.ok && inspectorName.trim()
 
   const totalScore = qcItems.reduce((s, i) => s + i.score, 0)
   const maxScore = qcItems.reduce((s, i) => s + i.maxScore, 0)
   const isPassed = totalScore >= maxScore * 0.8
 
+  const failedItemsWithFragments: FailedItemWithFragments[] = useMemo(() => {
+    if (!currentCall) return []
+    const items = displayConclusion ? displayConclusion.items : qcItems
+    const fragmentsSource = displayConclusion ? displayConclusion.problemFragments : null
+
+    return items
+      .filter((item) => item.isPassed === false)
+      .map((item) => {
+        let fragments: ProblemFragment[]
+        if (fragmentsSource) {
+          fragments = fragmentsSource.filter((f) => {
+            const seg = currentCall.transcript.find((s) => s.id === f.segmentId)
+            return item.relatedSegmentIds.includes(f.segmentId) || seg?.startTime !== undefined
+          })
+          fragments = item.relatedSegmentIds
+            .map((sid) => {
+              const frag = fragmentsSource.find((f) => f.segmentId === sid)
+              if (frag) return frag
+              const seg = currentCall.transcript.find((s) => s.id === sid)
+              return {
+                segmentId: sid,
+                originalText: seg?.originalText || '',
+                revisedText: seg?.isEdited ? seg.revisedText : undefined,
+                startTime: seg?.startTime || 0,
+                endTime: seg?.endTime || 0,
+                category: item.category,
+                reason: item.deductionReason || '未填写原因',
+                suggestion: item.suggestedScript,
+              }
+            })
+            .filter(Boolean) as ProblemFragment[]
+        } else {
+          fragments = item.relatedSegmentIds
+            .map((segId) => {
+              const seg = currentCall.transcript.find((s) => s.id === segId)
+              return {
+                segmentId: segId,
+                originalText: seg?.originalText || '',
+                revisedText: seg?.isEdited ? seg.revisedText : undefined,
+                startTime: seg?.startTime || 0,
+                endTime: seg?.endTime || 0,
+                category: item.category,
+                reason: item.deductionReason || '未填写原因',
+                suggestion: item.suggestedScript,
+              }
+            })
+        }
+        return { item, fragments }
+      })
+  }, [qcItems, currentCall, displayConclusion])
+
   const handleSubmit = () => {
-    if (!canSubmit) return
+    if (!canSubmit) {
+      setShowErrors(true)
+      message.error('请先完成所有不通过项的填写')
+      return
+    }
     try {
       const conclusion = submitConclusion(inspectorName.trim(), overallComment.trim())
       setSubmitted(conclusion)
+      setShowErrors(false)
       message.success('质检结论已提交！')
     } catch (e) {
       message.error('提交失败')
@@ -65,23 +136,29 @@ function ConclusionModal({ open, onClose, onSubmitted }: ConclusionModalProps) {
   }
 
   const handleClose = () => {
-    if (submitted) {
+    if (submitted && !isViewOnly) {
       onSubmitted(submitted)
     }
     setSubmitted(null)
+    setShowErrors(false)
     onClose()
   }
 
+  const showResult = !!displayConclusion
+  const resultScore = displayConclusion ? displayConclusion.totalScore : totalScore
+  const resultMaxScore = displayConclusion ? displayConclusion.maxScore : maxScore
+  const resultPassed = displayConclusion ? displayConclusion.isPassed : isPassed
+
   return (
     <Modal
-      title={submitted ? '质检结论已生成' : '提交质检结论'}
+      title={showResult ? '✅ 质检报告' : '📋 提交质检结论'}
       open={open}
       onCancel={handleClose}
-      width={800}
+      width={860}
       footer={
-        submitted ? (
-          <Button type="primary" onClick={handleClose}>
-            返回任务池
+        showResult ? (
+          <Button type="primary" size="large" onClick={handleClose}>
+            {submitted ? '返回任务池' : '关闭'}
           </Button>
         ) : (
           <Space>
@@ -93,114 +170,195 @@ function ConclusionModal({ open, onClose, onSubmitted }: ConclusionModalProps) {
         )
       }
     >
-      {pendingCount > 0 && !submitted && (
+      {showErrors && !showResult && validation.errors.length > 0 && (
         <Alert
-          type="warning"
+          type="error"
           showIcon
-          message={`还有 ${pendingCount} 项质检项未完成判定，请先完成所有质检项`}
+          icon={<WarningOutlined />}
+          message="请先补齐以下信息后再提交"
+          description={
+            <List
+              size="small"
+              dataSource={validation.errors}
+              renderItem={(err) => (
+                <List.Item>
+                  <Text type="danger">• {err}</Text>
+                </List.Item>
+              )}
+            />
+          }
           style={{ marginBottom: 16 }}
         />
       )}
 
-      {submitted ? (
+      {showResult ? (
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <Card
             style={{
               textAlign: 'center',
-              background: isPassed ? '#f6ffed' : '#fff2f0',
-              border: `1px solid ${isPassed ? '#b7eb8f' : '#ffa39e'}`,
+              background: resultPassed ? '#f6ffed' : '#fff2f0',
+              border: `2px solid ${resultPassed ? '#b7eb8f' : '#ffa39e'}`,
+              borderRadius: 12,
             }}
+            bodyStyle={{ padding: '24px 32px' }}
           >
-            <Space direction="vertical">
-              {isPassed ? (
-                <CheckCircleOutlined style={{ fontSize: 48, color: '#52c41a' }} />
+            <Space direction="vertical" size={12}>
+              {resultPassed ? (
+                <CheckCircleOutlined style={{ fontSize: 56, color: '#52c41a' }} />
               ) : (
-                <CloseCircleOutlined style={{ fontSize: 48, color: '#ff4d4f' }} />
+                <CloseCircleOutlined style={{ fontSize: 56, color: '#ff4d4f' }} />
               )}
-              <Title level={3} style={{ margin: 0, color: isPassed ? '#52c41a' : '#ff4d4f' }}>
-                {isPassed ? '质检合格' : '质检不合格'}
+              <Title level={2} style={{ margin: 0, color: resultPassed ? '#52c41a' : '#ff4d4f' }}>
+                {resultPassed ? '质检合格' : '质检不合格'}
               </Title>
-              <Text>
-                综合得分 <strong style={{ fontSize: 20 }}>{submitted.totalScore}</strong> / {submitted.maxScore} 分
-              </Text>
+              <Space size={8}>
+                <Text type="secondary">综合得分</Text>
+                <Text strong style={{ fontSize: 28, color: resultPassed ? '#52c41a' : '#ff4d4f' }}>
+                  {resultScore}
+                </Text>
+                <Text type="secondary" style={{ fontSize: 16 }}>
+                  / {resultMaxScore} 分
+                </Text>
+              </Space>
             </Space>
           </Card>
 
-          <Card size="small" title="基本信息">
+          <Card size="small" title="📌 基本信息">
             <Descriptions column={2} size="small">
-              <Descriptions.Item label="通话编号">{submitted.callId}</Descriptions.Item>
-              <Descriptions.Item label="质检员">{submitted.inspectorName}</Descriptions.Item>
-              <Descriptions.Item label="质检时间">{submitted.inspectTime}</Descriptions.Item>
-              <Descriptions.Item label="问题片段">{submitted.problemFragments.length} 处</Descriptions.Item>
+              <Descriptions.Item label="通话编号">
+                <Text strong>{displayConclusion!.callId}</Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="质检员">{displayConclusion!.inspectorName}</Descriptions.Item>
+              <Descriptions.Item label="质检时间">{displayConclusion!.inspectTime}</Descriptions.Item>
+              <Descriptions.Item label="不合格项">
+                <Tag color="error">
+                  {displayConclusion!.items.filter((i) => i.isPassed === false).length} 项
+                </Tag>
+                <Tag color="warning">{displayConclusion!.problemFragments.length} 处问题片段</Tag>
+              </Descriptions.Item>
             </Descriptions>
           </Card>
 
-          {submitted.problemFragments.length > 0 && (
+          {displayConclusion!.problemFragments.length > 0 && (
             <Card
               size="small"
               title={
                 <Space>
                   <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />
-                  <span>问题片段明细</span>
-                  <Tag color="error">{submitted.problemFragments.length} 处</Tag>
+                  <span>问题片段明细（按质检项分组）</span>
                 </Space>
               }
             >
-              <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                {submitted.problemFragments.map((f, idx) => (
+              <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                {failedItemsWithFragments.map(({ item, fragments }) => (
                   <div
-                    key={idx}
+                    key={item.id}
                     style={{
-                      padding: 12,
+                      padding: 16,
                       background: '#fff2f0',
-                      borderRadius: 6,
+                      borderRadius: 8,
                       border: '1px solid #ffccc7',
                     }}
                   >
-                    <Space style={{ marginBottom: 8 }}>
-                      <Tag color="purple">{QC_CATEGORY_LABELS[f.category as keyof typeof QC_CATEGORY_LABELS] || f.category}</Tag>
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        时间点：{formatTime(f.startTime)} - {formatTime(f.endTime)}
-                      </Text>
-                    </Space>
-                    <Paragraph style={{ marginBottom: 8 }}>
-                      <Text type="secondary">原文：</Text>
-                      {f.revisedText ? (
-                        <>
-                          <span style={{ textDecoration: 'line-through', color: '#bfbfbf' }}>{f.originalText}</span>
-                          <br />
-                          <Text type="secondary">修订：</Text>
-                          <span style={{ color: '#722ed1' }}>{f.revisedText}</span>
-                        </>
-                      ) : (
-                        f.originalText
-                      )}
-                    </Paragraph>
-                    <Paragraph style={{ marginBottom: 4 }}>
-                      <Text strong type="danger">原因：</Text>
-                      {f.reason}
-                    </Paragraph>
-                    {f.suggestion && (
-                      <Paragraph style={{ margin: 0 }}>
-                        <Text strong style={{ color: '#1677ff' }}>建议：</Text>
-                        {f.suggestion}
+                    <div
+                      style={{
+                        marginBottom: 12,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                      }}
+                    >
+                      <Space>
+                        <Tag color="purple">
+                          {QC_CATEGORY_LABELS[item.category as keyof typeof QC_CATEGORY_LABELS]}
+                        </Tag>
+                        <Text strong style={{ fontSize: 15 }}>
+                          {item.label}
+                        </Text>
+                        <Tag color="error">-{item.maxScore}分</Tag>
+                      </Space>
+                    </div>
+
+                    <div style={{ marginBottom: 12 }}>
+                      <Space>
+                        <MessageOutlined style={{ color: '#ff4d4f' }} />
+                        <Text strong type="danger">
+                          扣分原因：
+                        </Text>
+                      </Space>
+                      <Paragraph style={{ margin: '4px 0 0 22px' }}>
+                        {item.deductionReason || '未填写'}
                       </Paragraph>
-                    )}
+                    </div>
+
+                    <div style={{ marginBottom: 12 }}>
+                      <Space>
+                        <FileTextOutlined style={{ color: '#1677ff' }} />
+                        <Text strong style={{ color: '#1677ff' }}>
+                          建议话术：
+                        </Text>
+                      </Space>
+                      <Paragraph style={{ margin: '4px 0 0 22px', color: '#0958d9' }}>
+                        {item.suggestedScript || '未填写'}
+                      </Paragraph>
+                    </div>
+
+                    <div>
+                      <Space style={{ marginBottom: 8 }}>
+                        <ClockCircleOutlined style={{ color: '#d46b08' }} />
+                        <Text strong style={{ color: '#d46b08' }}>
+                          对应问题片段（{fragments.length} 处）：
+                        </Text>
+                      </Space>
+                      <Space direction="vertical" size={8} style={{ width: '100%', paddingLeft: 22 }}>
+                        {fragments.map((frag, idx) => (
+                          <div
+                            key={idx}
+                            style={{
+                              padding: '8px 12px',
+                              background: '#fff',
+                              borderRadius: 6,
+                              border: '1px solid #ffd591',
+                            }}
+                          >
+                            <Space style={{ marginBottom: 4 }}>
+                              <Tag color="orange" style={{ margin: 0 }}>
+                                ⏱ {formatTime(frag.startTime)} - {formatTime(frag.endTime)}
+                              </Tag>
+                            </Space>
+                            <div style={{ fontSize: 13, lineHeight: 1.6 }}>
+                              {frag.revisedText ? (
+                                <>
+                                  <div style={{ color: '#bfbfbf', textDecoration: 'line-through' }}>
+                                    原文：{frag.originalText}
+                                  </div>
+                                  <div style={{ color: '#722ed1', marginTop: 2 }}>
+                                    修订：{frag.revisedText}
+                                  </div>
+                                </>
+                              ) : (
+                                <span>{frag.originalText}</span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </Space>
+                    </div>
                   </div>
                 ))}
               </Space>
             </Card>
           )}
 
-          {submitted.overallComment && (
-            <Card size="small" title="总体评语">
-              <Paragraph style={{ margin: 0 }}>{submitted.overallComment}</Paragraph>
+          {displayConclusion!.overallComment && (
+            <Card size="small" title="📝 总体评语">
+              <Paragraph style={{ margin: 0 }}>{displayConclusion!.overallComment}</Paragraph>
             </Card>
           )}
         </Space>
       ) : (
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
-          <Card size="small" title="质检摘要">
+          <Card size="small" title="📊 质检摘要">
             <Descriptions column={2} size="small">
               <Descriptions.Item label="通话编号">{currentCall?.callId}</Descriptions.Item>
               <Descriptions.Item label="坐席">
@@ -219,42 +377,77 @@ function ConclusionModal({ open, onClose, onSubmitted }: ConclusionModalProps) {
                   {isPassed ? '合格' : '不合格'}
                 </Tag>
               </Descriptions.Item>
-              <Descriptions.Item label="不通过项">
-                {qcItems.filter((i) => i.isPassed === false).length} 项
+              <Descriptions.Item label="完成进度">
+                {qcItems.filter((i) => i.isPassed !== null).length} / {qcItems.length} 项
               </Descriptions.Item>
             </Descriptions>
           </Card>
 
-          <Card size="small" title="不通过项预览">
-            {qcItems.filter((i) => i.isPassed === false).length === 0 ? (
+          <Card size="small" title="❌ 不通过项预览">
+            {failedItemsWithFragments.length === 0 ? (
               <Alert type="success" showIcon message="本次质检无不合格项，全部通过！" />
             ) : (
-              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                {qcItems
-                  .filter((i) => i.isPassed === false)
-                  .map((item) => (
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                {failedItemsWithFragments.map(({ item, fragments }) => {
+                  const missingReason = !item.deductionReason || item.deductionReason === '待填写'
+                  const missingSuggestion = !item.suggestedScript
+                  const missingFragments = item.relatedSegmentIds.length === 0
+                  const hasMissing = missingReason || missingSuggestion || missingFragments
+
+                  return (
                     <div
                       key={item.id}
-                      style={{ padding: 8, background: '#fff2f0', borderRadius: 4 }}
+                      style={{
+                        padding: 12,
+                        background: hasMissing ? '#fffbe6' : '#fff2f0',
+                        borderRadius: 6,
+                        border: `1px solid ${hasMissing ? '#ffe58f' : '#ffccc7'}`,
+                      }}
                     >
-                      <Space>
-                        <Tag color="purple">{QC_CATEGORY_LABELS[item.category]}</Tag>
-                        <Text strong>{item.label}</Text>
-                        <Tag color="error">-{item.maxScore}分</Tag>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          marginBottom: 6,
+                        }}
+                      >
+                        <Space>
+                          <Tag color="purple">{QC_CATEGORY_LABELS[item.category]}</Tag>
+                          <Text strong>{item.label}</Text>
+                          <Tag color="error">-{item.maxScore}分</Tag>
+                        </Space>
+                        {hasMissing && (
+                          <Tag color="warning" icon={<WarningOutlined />}>
+                            信息待补全
+                          </Tag>
+                        )}
+                      </div>
+                      <Space direction="vertical" size={4} style={{ fontSize: 12 }}>
+                        {missingReason && (
+                          <Text type="warning">⚠ 未填写扣分原因</Text>
+                        )}
+                        {missingSuggestion && (
+                          <Text type="warning">⚠ 未填写建议话术</Text>
+                        )}
+                        {missingFragments && (
+                          <Text type="warning">⚠ 未关联任何问题片段</Text>
+                        )}
+                        {fragments.length > 0 && (
+                          <Text type="secondary">
+                            已关联 {fragments.length} 处问题片段
+                          </Text>
+                        )}
                       </Space>
-                      {item.deductionReason && (
-                        <div style={{ fontSize: 12, color: '#595959', marginTop: 4 }}>
-                          原因：{item.deductionReason}
-                        </div>
-                      )}
                     </div>
-                  ))}
+                  )
+                })}
               </Space>
             )}
           </Card>
 
           <div>
-            <Text strong>质检员姓名</Text>
+            <Text strong>质检员姓名 <Text type="danger">*</Text></Text>
             <Input
               style={{ marginTop: 4 }}
               value={inspectorName}
@@ -271,8 +464,33 @@ function ConclusionModal({ open, onClose, onSubmitted }: ConclusionModalProps) {
               value={overallComment}
               onChange={(e) => setOverallComment(e.target.value)}
               placeholder="请输入总体评语..."
+              maxLength={500}
+              showCount
             />
           </div>
+
+          {validation.errors.length > 0 && (
+            <Alert
+              type={showErrors ? 'error' : 'warning'}
+              showIcon
+              message={
+                showErrors
+                  ? '提交失败，请补齐以下信息'
+                  : `还有 ${validation.errors.length} 项信息待补齐，提交前请确认`
+              }
+              description={
+                <List
+                  size="small"
+                  dataSource={validation.errors}
+                  renderItem={(err) => (
+                    <List.Item style={{ padding: '2px 0' }}>
+                      <Text type={showErrors ? 'danger' : 'warning'}>• {err}</Text>
+                    </List.Item>
+                  )}
+                />
+              }
+            />
+          )}
         </Space>
       )}
     </Modal>

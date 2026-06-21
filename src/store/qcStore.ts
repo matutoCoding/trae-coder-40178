@@ -24,6 +24,8 @@ interface QcStore {
   selectCall: (callId: string) => void
   clearCurrentCall: () => void
 
+  setAudioFile: (filePath: string) => void
+
   updateTranscriptSegment: (id: string, updates: Partial<TranscriptSegment>) => void
   mergeSegments: (ids: string[]) => void
   toggleUnclear: (id: string) => void
@@ -36,7 +38,10 @@ interface QcStore {
   setIsPlaying: (playing: boolean) => void
   setPlaybackRate: (rate: number) => void
 
+  validateSubmittable: () => { ok: boolean; errors: string[] }
   submitConclusion: (inspectorName: string, overallComment?: string) => QcConclusion
+
+  syncCurrentToCalls: () => void
 }
 
 function deepCloneQcItems(): QcCheckItem[] {
@@ -71,7 +76,12 @@ export const useQcStore = create<QcStore>((set, get) => ({
     const { calls, filterDate, filterAgent, filterBusinessLine, filterStatus } = get()
     return calls.filter((call) => {
       if (filterStatus !== 'all' && call.status !== filterStatus) return false
-      if (filterAgent && !call.agentName.includes(filterAgent)) return false
+      if (filterAgent) {
+        const keyword = filterAgent.toLowerCase()
+        const nameMatch = call.agentName.toLowerCase().includes(keyword)
+        const idMatch = call.agentId.toLowerCase().includes(keyword)
+        if (!nameMatch && !idMatch) return false
+      }
       if (filterBusinessLine !== 'all' && call.businessLine !== filterBusinessLine) return false
       if (filterDate) {
         const callDate = call.callTime.split(' ')[0]
@@ -84,16 +94,44 @@ export const useQcStore = create<QcStore>((set, get) => ({
   selectCall: (callId) => {
     const call = get().calls.find((c) => c.id === callId)
     if (call) {
+      const savedQcItems = call.qcItems || deepCloneQcItems()
       set({
-        currentCall: { ...call, status: 'inspecting' },
-        qcItems: deepCloneQcItems(),
+        currentCall: { ...call, status: call.status === 'pending' ? 'inspecting' : call.status },
+        qcItems: savedQcItems,
         currentTime: 0,
         isPlaying: false,
       })
     }
   },
 
-  clearCurrentCall: () => set({ currentCall: null, qcItems: deepCloneQcItems(), currentTime: 0 }),
+  clearCurrentCall: () => {
+    get().syncCurrentToCalls()
+    set({ currentCall: null, qcItems: deepCloneQcItems(), currentTime: 0, isPlaying: false })
+  },
+
+  setAudioFile: (filePath) => {
+    set((state) => {
+      if (!state.currentCall) return state
+      const updatedCall = { ...state.currentCall, audioFilePath: filePath }
+      return {
+        currentCall: updatedCall,
+        calls: state.calls.map((c) => (c.id === state.currentCall!.id ? updatedCall : c)),
+      }
+    })
+  },
+
+  syncCurrentToCalls: () => {
+    set((state) => {
+      if (!state.currentCall) return state
+      const updatedCall = {
+        ...state.currentCall,
+        qcItems: state.qcItems,
+      }
+      return {
+        calls: state.calls.map((c) => (c.id === state.currentCall!.id ? updatedCall : c)),
+      }
+    })
+  },
 
   updateTranscriptSegment: (id, updates) => {
     set((state) => {
@@ -101,8 +139,10 @@ export const useQcStore = create<QcStore>((set, get) => ({
       const newTranscript = state.currentCall.transcript.map((seg) =>
         seg.id === id ? { ...seg, ...updates, isEdited: true } : seg
       )
+      const updatedCall = { ...state.currentCall, transcript: newTranscript }
       return {
-        currentCall: { ...state.currentCall, transcript: newTranscript },
+        currentCall: updatedCall,
+        calls: state.calls.map((c) => (c.id === state.currentCall!.id ? updatedCall : c)),
       }
     })
   },
@@ -133,8 +173,10 @@ export const useQcStore = create<QcStore>((set, get) => ({
         .map((s) => (s.id === firstId ? mergedSegment : s))
         .sort((a, b) => a.startTime - b.startTime)
 
+      const updatedCall = { ...state.currentCall, transcript: newTranscript }
       return {
-        currentCall: { ...state.currentCall, transcript: newTranscript },
+        currentCall: updatedCall,
+        calls: state.calls.map((c) => (c.id === state.currentCall!.id ? updatedCall : c)),
       }
     })
   },
@@ -145,8 +187,10 @@ export const useQcStore = create<QcStore>((set, get) => ({
       const newTranscript = state.currentCall.transcript.map((seg) =>
         seg.id === id ? { ...seg, isUnclear: !seg.isUnclear, isEdited: true } : seg
       )
+      const updatedCall = { ...state.currentCall, transcript: newTranscript }
       return {
-        currentCall: { ...state.currentCall, transcript: newTranscript },
+        currentCall: updatedCall,
+        calls: state.calls.map((c) => (c.id === state.currentCall!.id ? updatedCall : c)),
       }
     })
   },
@@ -165,6 +209,7 @@ export const useQcStore = create<QcStore>((set, get) => ({
       })
       return { qcItems: newItems }
     })
+    get().syncCurrentToCalls()
   },
 
   toggleQcItemRelated: (qcItemId, segmentId) => {
@@ -181,13 +226,42 @@ export const useQcStore = create<QcStore>((set, get) => ({
       })
       return { qcItems: newItems }
     })
+    get().syncCurrentToCalls()
   },
 
-  resetQcItems: () => set({ qcItems: deepCloneQcItems() }),
+  resetQcItems: () => {
+    set({ qcItems: deepCloneQcItems() })
+    get().syncCurrentToCalls()
+  },
 
   setCurrentTime: (time) => set({ currentTime: time }),
   setIsPlaying: (playing) => set({ isPlaying: playing }),
   setPlaybackRate: (rate) => set({ playbackRate: rate }),
+
+  validateSubmittable: () => {
+    const { qcItems } = get()
+    const errors: string[] = []
+
+    const unjudged = qcItems.filter((i) => i.isPassed === null)
+    if (unjudged.length > 0) {
+      errors.push(`还有 ${unjudged.length} 项质检项未判定，请先完成判定`)
+    }
+
+    const failedItems = qcItems.filter((i) => i.isPassed === false)
+    for (const item of failedItems) {
+      if (!item.deductionReason || item.deductionReason === '待填写' || item.deductionReason.trim() === '') {
+      errors.push(`「${item.label}」未填写扣分原因`)
+    }
+      if (!item.suggestedScript || item.suggestedScript.trim() === '') {
+        errors.push(`「${item.label}」未填写建议话术`)
+      }
+      if (item.relatedSegmentIds.length === 0) {
+        errors.push(`「${item.label}」未关联任何问题片段，请在转写中标记`)
+      }
+    }
+
+    return { ok: errors.length === 0, errors }
+  },
 
   submitConclusion: (inspectorName, overallComment) => {
     const { currentCall, qcItems } = get()
@@ -226,10 +300,17 @@ export const useQcStore = create<QcStore>((set, get) => ({
       overallComment,
     }
 
+    const completedCall = {
+      ...currentCall,
+      status: 'completed' as const,
+      qcItems,
+      qcConclusion: conclusion,
+    }
+
     set((state) => ({
       conclusion,
-      currentCall: state.currentCall ? { ...state.currentCall, status: 'completed' } : null,
-      calls: state.calls.map((c) => (c.id === currentCall.id ? { ...c, status: 'completed' as const } : c)),
+      currentCall: completedCall,
+      calls: state.calls.map((c) => (c.id === currentCall.id ? completedCall : c)),
     }))
 
     return conclusion

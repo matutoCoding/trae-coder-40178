@@ -9,6 +9,7 @@ import {
   SaveOutlined,
   SendOutlined,
   InfoCircleOutlined,
+  CheckCircleOutlined,
 } from '@ant-design/icons'
 import { useQcStore } from '../store/qcStore'
 import { BUSINESS_LINE_OPTIONS } from '../types'
@@ -41,6 +42,8 @@ function InspectWorkbench() {
   const pendingCount = qcItems.length - completedCount
 
   const businessLineLabel = BUSINESS_LINE_OPTIONS.find((o) => o.value === currentCall?.businessLine)?.label
+  const isCompleted = currentCall?.status === 'completed'
+  const hasConclusion = !!currentCall?.qcConclusion
 
   const handleConclusionSubmitted = (_conclusion: QcConclusion) => {
     setConclusionModalOpen(false)
@@ -72,7 +75,7 @@ function InspectWorkbench() {
           <Breadcrumb
             items={[
               { title: '任务池', onClick: clearCurrentCall },
-              { title: '逐通复核工作台' },
+              { title: isCompleted ? '质检结果查看' : '逐通复核工作台' },
             ]}
           />
         </Space>
@@ -101,23 +104,42 @@ function InspectWorkbench() {
         </div>
 
         <Space>
-          <Alert
-            type={pendingCount === 0 ? 'success' : 'info'}
-            showIcon
-            message={
-              pendingCount === 0
-                ? `质检完成 ${completedCount}/${qcItems.length} 项，得分 ${totalScore}/${maxScore}`
-                : `已完成 ${completedCount}/${qcItems.length} 项，剩余 ${pendingCount} 项待判定`
-            }
-            style={{ padding: '0 12px', height: 32 }}
-          />
-          <Button
-            type="primary"
-            icon={<SendOutlined />}
-            onClick={() => setConclusionModalOpen(true)}
-          >
-            提交质检结论
-          </Button>
+          {isCompleted ? (
+            <>
+              <Tag color="success" icon={<CheckCircleOutlined />}>
+                已完成质检
+              </Tag>
+              {hasConclusion && (
+                <Button
+                  type="primary"
+                  icon={<FileTextOutlined />}
+                  onClick={() => setConclusionModalOpen(true)}
+                >
+                  查看质检报告
+                </Button>
+              )}
+            </>
+          ) : (
+            <>
+              <Alert
+                type={pendingCount === 0 ? 'success' : 'info'}
+                showIcon
+                message={
+                  pendingCount === 0
+                    ? `质检完成 ${completedCount}/${qcItems.length} 项，得分 ${totalScore}/${maxScore}`
+                    : `已完成 ${completedCount}/${qcItems.length} 项，剩余 ${pendingCount} 项待判定`
+                }
+                style={{ padding: '0 12px', height: 32 }}
+              />
+              <Button
+                type="primary"
+                icon={<SendOutlined />}
+                onClick={() => setConclusionModalOpen(true)}
+              >
+                提交质检结论
+              </Button>
+            </>
+          )}
         </Space>
       </Header>
 

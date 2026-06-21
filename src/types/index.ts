@@ -27,8 +27,11 @@ export interface CallTask {
   duration: number
   customerPhone: string
   audioUrl: string
+  audioFilePath?: string
   status: CallStatus
   transcript: TranscriptSegment[]
+  qcItems?: QcCheckItem[]
+  qcConclusion?: QcConclusion
 }
 
 export interface QcCheckItem {
