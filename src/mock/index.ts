@@ -10,7 +10,7 @@ export const MOCK_CALLS: CallTask[] = [
     callTime: '2024-12-20 09:15:32',
     duration: 245,
     customerPhone: '138****5678',
-    audioUrl: '',
+    audioUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
     status: 'pending',
     transcript: [
       { id: 's1', startTime: 0, endTime: 5, speaker: 'agent', originalText: '喂您好请问是李女士吗', revisedText: '喂您好，请问是李女士吗？', isUnclear: false, isEdited: true },
@@ -39,7 +39,7 @@ export const MOCK_CALLS: CallTask[] = [
     callTime: '2024-12-20 10:23:45',
     duration: 312,
     customerPhone: '139****1234',
-    audioUrl: '',
+    audioUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3',
     status: 'pending',
     transcript: [
       { id: 's1', startTime: 0, endTime: 6, speaker: 'agent', originalText: '喂你好那位', revisedText: '喂，你好，哪位？', isUnclear: false, isEdited: true },
@@ -64,7 +64,7 @@ export const MOCK_CALLS: CallTask[] = [
     callTime: '2024-12-20 11:05:18',
     duration: 198,
     customerPhone: '137****8899',
-    audioUrl: '',
+    audioUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3',
     status: 'inspecting',
     transcript: [
       { id: 's1', startTime: 0, endTime: 8, speaker: 'agent', originalText: '您好这里是XX保险公司请问是赵先生吗', revisedText: '您好，这里是XX保险公司，请问是赵先生吗？', isUnclear: false, isEdited: true },
@@ -89,7 +89,7 @@ export const MOCK_CALLS: CallTask[] = [
     callTime: '2024-12-19 14:30:22',
     duration: 156,
     customerPhone: '136****3344',
-    audioUrl: '',
+    audioUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3',
     status: 'completed',
     transcript: [
       { id: 's1', startTime: 0, endTime: 5, speaker: 'agent', originalText: '您好请问有什么可以帮您', revisedText: '您好，请问有什么可以帮您？', isUnclear: false, isEdited: true },
